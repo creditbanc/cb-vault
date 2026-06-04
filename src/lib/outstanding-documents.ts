@@ -22,6 +22,10 @@ export interface OutstandingDocsBreakdown {
     /** Flat de-duped list across every group. Drives backward-compat callers
      *  (GHL sync, single-business email) without re-walking the structure. */
     flat: string[];
+    /** Same flat list with codes alongside labels. Additive — the doc-chase
+     *  agent (Ava) matches on codes but speaks labels. Existing callers keep
+     *  using `flat`. */
+    flatDocs: { code: string; label: string }[];
 }
 
 /**
@@ -51,7 +55,7 @@ export async function calculateOutstandingDocumentsByBusiness(userId: string): P
         .eq("user_id", userId)
         .maybeSingle();
     if (!vault) {
-        return { groups: [], flat: [] };
+        return { groups: [], flat: [], flatDocs: [] };
     }
 
     const { data: businesses } = await supabase
@@ -137,6 +141,8 @@ export async function calculateOutstandingDocumentsByBusiness(userId: string): P
     const groups: BusinessMissingDocs[] = [];
     const flat: string[] = [];
     const flatSeen = new Set<string>();
+    const flatDocs: { code: string; label: string }[] = [];
+    const flatCodeSeen = new Set<string>();
 
     // 5a. Client-scoped bucket. Show as its own "Personal Documents" group
     //     when there are 2+ businesses; otherwise inline into the (sole) business.
@@ -154,6 +160,7 @@ export async function calculateOutstandingDocumentsByBusiness(userId: string): P
         });
         personalMissing.forEach(m => {
             if (!flatSeen.has(m.label)) { flatSeen.add(m.label); flat.push(m.label); }
+            if (!flatCodeSeen.has(m.code)) { flatCodeSeen.add(m.code); flatDocs.push(m); }
         });
     }
 
@@ -161,19 +168,20 @@ export async function calculateOutstandingDocumentsByBusiness(userId: string): P
     for (const biz of businessRows) {
         const requested = perBusinessRequested.get(biz.id) ?? new Map<string, string>();
         const satisfied = perBusinessSatisfied.get(biz.id) ?? new Set<string>();
-        const missingForBiz: string[] = [];
+        const missingRefs: { code: string; label: string }[] = [];
         requested.forEach((label, code) => {
-            if (!satisfied.has(code)) missingForBiz.push(label);
+            if (!satisfied.has(code)) missingRefs.push({ code, label });
         });
 
         // Single-business client → fold the personal-doc misses into this
         // group so the email looks identical to the pre-multi-business UX.
         if (!isMultiBusiness && personalMissing.length > 0) {
             personalMissing.forEach(m => {
-                if (!missingForBiz.includes(m.label)) missingForBiz.push(m.label);
+                if (!missingRefs.some(r => r.label === m.label)) missingRefs.push(m);
             });
         }
 
+        const missingForBiz = missingRefs.map(r => r.label);
         if (missingForBiz.length === 0) continue;
         groups.push({
             business_profile_id: biz.id,
@@ -181,12 +189,13 @@ export async function calculateOutstandingDocumentsByBusiness(userId: string): P
             is_primary: !!biz.is_primary,
             missing_docs: missingForBiz,
         });
-        missingForBiz.forEach(label => {
-            if (!flatSeen.has(label)) { flatSeen.add(label); flat.push(label); }
+        missingRefs.forEach(r => {
+            if (!flatSeen.has(r.label)) { flatSeen.add(r.label); flat.push(r.label); }
+            if (!flatCodeSeen.has(r.code)) { flatCodeSeen.add(r.code); flatDocs.push(r); }
         });
     }
 
-    return { groups, flat };
+    return { groups, flat, flatDocs };
 }
 
 /** Legacy flat-list API. Kept for callers that don't need per-business

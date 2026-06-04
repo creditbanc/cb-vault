@@ -80,6 +80,24 @@ export function buildFieldIndex(list: GhlCustomField[]) {
   return map;
 }
 
+/**
+ * Sends an SMS to a contact via the GHL Conversations API.
+ * Used by the doc-chase agent (Ava) — direct send, no workflow/tag round-trip.
+ * Returns the GHL message/conversation ids.
+ */
+export async function ghlSendSMS(contactId: string, message: string) {
+  const res = await fetch(`${BASE}/conversations/messages`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({
+      type: "SMS",
+      contactId,
+      message,
+    }),
+  });
+  return handle(res) as Promise<{ conversationId?: string; messageId?: string }>;
+}
+
 export async function ghlAddTags(contactId: string, tags: string[]) {
   if (!tags?.length) return;
   const res = await fetch(`${BASE}/contacts/${contactId}/tags`, {
